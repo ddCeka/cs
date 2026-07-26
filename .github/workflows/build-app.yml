@@ -1,9 +1,9 @@
 name: Build
 
 on:
-  # Every Friday at 10:00 UTC
+  # Every Thusday at 12:00 UTC
   schedule:
-    - cron: '0 10 * * 5'
+    - cron: '0 12 * * 4'
 
   # Manual triggers
   workflow_dispatch:
