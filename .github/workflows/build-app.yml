@@ -1,9 +1,9 @@
 name: Build
 
 on:
-  # Every Thusday at 12:00 UTC
+  # Every Thusday at 08:00 UTC can get delayed
   schedule:
-    - cron: '0 12 * * 4'
+    - cron: '0 8 * * 4'
 
   # Manual triggers
   workflow_dispatch:
@@ -28,16 +28,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v7
 
       - name: Set up JDK 11
-        uses: actions/setup-java@v2
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'adopt'
 
       - name: Clone Repository (Latest)
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
         with:
           repository: '${{ env.REPO_NAME }}'
           fetch-depth: 0
@@ -45,7 +45,7 @@ jobs:
         if: github.event.inputs.git-ref == ''
 
       - name: Clone Repository (Custom Ref)
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
         if: github.event.inputs.git-ref != ''
         with:
           repository: '${{ env.REPO_NAME }}'
@@ -53,7 +53,7 @@ jobs:
           ref: ${{ github.event.inputs.git-ref }}
 
       - name: Clone Repository (This)
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
         with:
           path: './res'
 
@@ -64,7 +64,7 @@ jobs:
       - name: Get previous release
         if: github.event.inputs.first-run == ''
         id: last_release
-        uses: InsonusK/get-latest-release@v1.0.1
+        uses: InsonusK/get-latest-release@v1.1.0
         with:
           myToken: ${{ github.token }}
           exclude_types: "draft|prerelease"
@@ -171,7 +171,7 @@ jobs:
 
       - name: Create first release
         if: github.event.inputs.first-run == 'true'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: r${{ env.COMMIT_COUNT }}
           name: Cloudstream r${{ env.COMMIT_COUNT }}
@@ -189,7 +189,7 @@ jobs:
 
       - name: Create release
         if: env.RUN_BUILD == 'true'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: r${{ env.COMMIT_COUNT }}
           name: Cloudstream r${{ env.COMMIT_COUNT }}
@@ -211,7 +211,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prune old releases
-        uses: dev-drprasad/delete-older-releases@v0.2.0
+        uses: dev-drprasad/delete-older-releases@v0.3.4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
