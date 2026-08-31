@@ -26,7 +26,6 @@ def replace_str_using_regex(path: str, regex: str, new_text: str):
             with open(path, "r", encoding='utf-8') as file:
                 print("Read file..")
                 text: str = file.read()
-                #print("Old text => {0}".format(text))
                 file.close()
                 print("Reading file closed!")
 
@@ -34,8 +33,6 @@ def replace_str_using_regex(path: str, regex: str, new_text: str):
             with open(path, "w", encoding='utf-8') as file:
                 print("Replacing file contents..")
                 newText: str = re.sub(regex, new_text, text)
-                #newText: str = text.replace("com.lagradost.cloudstream3", newAppPackage)
-                #print("New text => {0}".format(newText))
                 file.truncate(0)
                 print("File cleared!")
                 file.write(newText)
