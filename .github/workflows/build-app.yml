@@ -1,9 +1,8 @@
 name: Build
 
 on:
-  # Every Thursday at 09:00 UTC can get delayed
   schedule:
-    - cron: '0 9 * * 4'
+    - cron: '0 8 * * 6'
 
   # Manual triggers
   workflow_dispatch:
