@@ -2,7 +2,10 @@ name: Build
 
 on:
   schedule:
-    - cron: '0 8 * * 6'
+    # 8:30 AM UTC+8 (Singapore)
+    - cron: '30 0 * * *'
+    # 8:30 AM UTC+7
+    # - cron: '30 1 * * *'
 
   # Manual triggers
   workflow_dispatch:
