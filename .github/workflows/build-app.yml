@@ -5,64 +5,71 @@ on:
     # 09:00 AM UTC+7
     - cron: '0 2 * * *'
 
-  # Manual triggers
   workflow_dispatch:
     inputs:
       git-ref:
         description: Git Ref (Optional)
         required: false
+        type: string
       dry-run:
         description: Creates a draft release
         required: false
+        default: false
+        type: boolean
       first-run:
         description: First release
         required: false
+        default: false
+        type: boolean
 
 env:
   REPO_NAME: recloudstream/cloudstream
+  REPO_BRANCH: master
   RUN_BUILD: 'true'
   APK_NAME: Cloudstreams.apk
-  REPO_BRANCH: master
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
+    permissions:
+      contents: write
 
+    steps:
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
-      - name: Clone Repository (Latest)
-        uses: actions/checkout@v7
+      - name: Determine target ref
+        id: target_ref
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.git-ref }}" ]; then
+            echo "ref=${{ inputs.git-ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ env.REPO_BRANCH }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clone target repository
+        uses: actions/checkout@v4
         with:
           repository: '${{ env.REPO_NAME }}'
+          ref: ${{ steps.target_ref.outputs.ref }}
           fetch-depth: 0
-          ref: '${{ env.REPO_BRANCH }}'
-        if: github.event.inputs.git-ref == ''
 
-      - name: Clone Repository (Custom Ref)
-        uses: actions/checkout@v7
-        if: github.event.inputs.git-ref != ''
-        with:
-          repository: '${{ env.REPO_NAME }}'
-          fetch-depth: 0
-          ref: ${{ github.event.inputs.git-ref }}
-
-      - name: Clone Repository (This)
-        uses: actions/checkout@v7
+      - name: Checkout helper repo
+        uses: actions/checkout@v4
         with:
           path: './res'
 
       - name: Run script to change package name
+        shell: bash
         run: |
           cp ./res/changename.py .
 
       - name: Get previous release
-        if: github.event.inputs.first-run == ''
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.first-run == true) }}
         id: last_release
         uses: InsonusK/get-latest-release@v1.1.0
         with:
@@ -70,87 +77,123 @@ jobs:
           exclude_types: "draft|prerelease"
           view_top: 1
 
-      - name: Get commit count for first release
-        if: github.event.inputs.first-run == 'true'
-        run:  |
-          set -e
+      - name: Resolve build metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
           commit_count=$(git rev-list --count HEAD)
-          echo "COMMIT_COUNT=$commit_count" >> $GITHUB_ENV
-          echo "CURRENT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          current_sha=$(git rev-parse HEAD)
+          echo "COMMIT_COUNT=${commit_count}" >> "$GITHUB_ENV"
+          echo "CURRENT_SHA=${current_sha}" >> "$GITHUB_ENV"
 
-          echo "COMMIT_COUNT_DIFF=0" >> $GITHUB_ENV
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.first-run }}" = "true" ]; then
+            echo "HAS_PREVIOUS_RELEASE=false" >> "$GITHUB_ENV"
+            echo "COMMIT_COUNT_DIFF=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
 
-      - name: Get current commit count, and count from previous commit
-        if: github.event.inputs.first-run == ''
-        run:  |
-          set -e
-          commit_count=$(git rev-list --count HEAD)
-          echo "COMMIT_COUNT=$commit_count" >> $GITHUB_ENV
-          echo "CURRENT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          last_tag="${{ steps.last_release.outputs.tag_name }}"
+          if [ -z "${last_tag:-}" ]; then
+            echo "HAS_PREVIOUS_RELEASE=false" >> "$GITHUB_ENV"
+            echo "COMMIT_COUNT_DIFF=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
 
-          prev_commit_count=$(echo "${{ steps.last_release.outputs.tag_name }}" | sed -e "s/^r//")
+          prev_commit_count="${last_tag#r}"
+          if [[ ! "${prev_commit_count}" =~ ^[0-9]+$ ]]; then
+            echo "HAS_PREVIOUS_RELEASE=false" >> "$GITHUB_ENV"
+            echo "COMMIT_COUNT_DIFF=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
 
-          echo "COMMIT_COUNT_DIFF=$(($commit_count - $prev_commit_count))" >> $GITHUB_ENV
+          echo "HAS_PREVIOUS_RELEASE=true" >> "$GITHUB_ENV"
+          echo "COMMIT_COUNT_DIFF=$(( commit_count - prev_commit_count ))" >> "$GITHUB_ENV"
 
       - name: Exit if there are no new commits since last release
-        if: env.COMMIT_COUNT_DIFF < 1 && github.event.inputs.first-run == ''
+        if: ${{ env.RUN_BUILD == 'true' && env.HAS_PREVIOUS_RELEASE == 'true' && env.COMMIT_COUNT_DIFF != '' && env.COMMIT_COUNT_DIFF < 1 }}
+        shell: bash
         run: |
-          set -e
-
-          echo "RUN_BUILD='false'" >> $GITHUB_ENV
+          set -euo pipefail
+          echo "RUN_BUILD=false" >> "$GITHUB_ENV"
+          echo "No new commits since last release. Skipping build."
           exit 0
 
-      - name: Get previous commit count, and set up commit logs
-        if: env.RUN_BUILD == 'true'
-        run:  |
-          set -e
+      - name: Prepare compare metadata
+        if: ${{ env.RUN_BUILD == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          current_sha=${{ env.CURRENT_SHA }}
-          commit_count_diff=${{ env.COMMIT_COUNT_DIFF }}
+          current_sha="${CURRENT_SHA}"
+          commit_count_diff="${COMMIT_COUNT_DIFF}"
 
-          prev_release_sha=$(git rev-parse --short $current_sha~$commit_count_diff)
-          echo "PREV_RELEASE_SHA=$prev_release_sha" >> $GITHUB_ENV
+          if [ "${HAS_PREVIOUS_RELEASE:-false}" = "true" ] && [ "${commit_count_diff}" -gt 0 ]; then
+            prev_release_sha=$(git rev-parse --short "${current_sha}~${commit_count_diff}")
+          else
+            prev_release_sha=$(git rev-list --max-count=1 HEAD~1 2>/dev/null || true)
+          fi
 
-          echo "COMMIT_LOGS<<{delimiter}
-          $(curl -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ env.REPO_NAME }}/compare/$prev_release_sha...$current_sha" \
-            | jq '[.commits[]|{message:(.commit.message | split("\n")), username:.author.login}]' \
-            | jq -r '.[]|"- \(.message | first) (@\(.username))"')
-          {delimiter}" >> $GITHUB_ENV
+          if [ -n "${prev_release_sha:-}" ] && [ "${prev_release_sha}" != "true" ]; then
+            echo "PREV_RELEASE_SHA=${prev_release_sha}" >> "$GITHUB_ENV"
+          else
+            echo "PREV_RELEASE_SHA=unknown" >> "$GITHUB_ENV"
+          fi
 
-          echo "APK_NAME=Cloudstreams-r${{ env.COMMIT_COUNT }}.apk" >> $GITHUB_ENV
+          if [ -n "${prev_release_sha:-}" ] && [ "${prev_release_sha}" != "unknown" ] && [ "${prev_release_sha}" != "true" ]; then
+            commit_logs="$(curl -fsSL -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${REPO_NAME}/compare/${prev_release_sha}...${current_sha}" \
+              | jq -r '.commits[] | select(.author != null) | "- \(.commit.message | split("\n")[0]) (@\(.author.login))"' )"
+          else
+            commit_logs="- Initial release"
+          fi
+
+          printf 'COMMIT_LOGS<<EOF\n%s\nEOF\n' "${commit_logs}" >> "$GITHUB_ENV"
+          echo "APK_NAME=Cloudstreams-r${COMMIT_COUNT}.apk" >> "$GITHUB_ENV"
 
       - name: Update package name
-        if: env.RUN_BUILD == 'true'
+        if: ${{ env.RUN_BUILD == 'true' }}
+        shell: bash
         run: |
           python3 ./changename.py
 
       - name: Grant execute permission for gradlew
-        if: env.RUN_BUILD == 'true'
+        if: ${{ env.RUN_BUILD == 'true' }}
+        shell: bash
         run: chmod +x gradlew
 
       - name: Set checks for prerelease updates to true by default
-        if: env.RUN_BUILD == 'true'
+        if: ${{ env.RUN_BUILD == 'true' }}
+        shell: bash
         run: |
           sed -i "s/R\.string\.prerelease_update_key), false))/R\.string\.prerelease_update_key), true))/" app/src/main/java/com/lagradost/cloudstream3/utils/InAppUpdater.kt
 
       - name: Update prerelease_commit_hash
-        if: env.RUN_BUILD == 'true'
+        if: ${{ env.RUN_BUILD == 'true' }}
+        shell: bash
         run: |
           COMMIT_HASH="$(git log -1 --format='%H')"
           sed -i "s/<string name=\"prerelease_commit_hash\" translatable=\"false\">unknown_prerelease<\/string>/<string name=\"prerelease_commit_hash\">$COMMIT_HASH<\/string>/g" app/src/main/res/values/strings.xml
 
       - name: Decode Keystore
-        if: env.RUN_BUILD == 'true'
+        if: ${{ env.RUN_BUILD == 'true' }}
         env:
           ENCODED_STRING: ${{ secrets.KEYSTORE }}
+        shell: bash
         run: |
-          TMP_KEYSTORE_FILE_PATH="${RUNNER_TEMP}"/keystore
+          TMP_KEYSTORE_FILE_PATH="${RUNNER_TEMP}/keystore"
           mkdir -p "${TMP_KEYSTORE_FILE_PATH}"
-          echo $ENCODED_STRING | base64 -di > "${TMP_KEYSTORE_FILE_PATH}"/prerelease_keystore.keystore
+
+          if [ -z "${ENCODED_STRING:-}" ]; then
+            echo "Keystore secret is missing."
+            exit 1
+          fi
+
+          echo "$ENCODED_STRING" | base64 -d > "${TMP_KEYSTORE_FILE_PATH}/prerelease_keystore.keystore"
 
       - name: Run Gradle
-        if: env.RUN_BUILD == 'true'
+        if: ${{ env.RUN_BUILD == 'true' }}
+        shell: bash
         run: |
           ./gradlew assemblePrereleaseRelease androidSourcesJar makeJar
         env:
@@ -159,18 +202,26 @@ jobs:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
 
       - name: Clean up build artifacts
-        if: env.RUN_BUILD == 'true'
+        if: ${{ env.RUN_BUILD == 'true' }}
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
+          shopt -s nullglob
           allapk=($(find app/build/outputs/apk/ -type f -name "*.apk"))
           mylist=($(find app/build/outputs/apk/prerelease/release/ -type f -name "*.apk"))
-          cp ${mylist[0]} ${{ env.APK_NAME }}
+
+          if [ ${#mylist[@]} -eq 0 ]; then
+            echo "No APK found in prerelease release output."
+            exit 1
+          fi
+
+          cp "${mylist[0]}" "${{ env.APK_NAME }}"
           printf '%s\n' "${allapk[@]}"
 
       - name: Create first release
-        if: github.event.inputs.first-run == 'true'
-        uses: softprops/action-gh-release@v3
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.first-run == true }}
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: r${{ env.COMMIT_COUNT }}
           name: Cloudstream r${{ env.COMMIT_COUNT }}
@@ -180,15 +231,15 @@ jobs:
             https://github.com/${{ env.REPO_NAME }}/tree/${{ env.CURRENT_SHA }}
 
           files: |
-            Cloudstream3-r${{ env.COMMIT_COUNT }}.apk
-          draft: ${{ github.event.inputs.dry-run != '' }}
+            ${{ env.APK_NAME }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run == true }}
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create release
-        if: env.RUN_BUILD == 'true'
-        uses: softprops/action-gh-release@v3
+        if: ${{ env.RUN_BUILD == 'true' }}
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: r${{ env.COMMIT_COUNT }}
           name: Cloudstream r${{ env.COMMIT_COUNT }}
@@ -203,13 +254,13 @@ jobs:
             ${{ env.APK_NAME }}
             app/build/libs/app-sources.jar
             app/build/classes.jar
-
-          draft: ${{ github.event.inputs.dry-run != '' }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run == true }}
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prune old releases
+        if: ${{ always() }}
         uses: dev-drprasad/delete-older-releases@v0.3.4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
