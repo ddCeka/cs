@@ -36,7 +36,7 @@ jobs:
 
     steps:
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -52,14 +52,14 @@ jobs:
           fi
 
       - name: Clone target repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: '${{ env.REPO_NAME }}'
           ref: ${{ steps.target_ref.outputs.ref }}
           fetch-depth: 0
 
       - name: Checkout helper repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: './res'
 
@@ -221,7 +221,7 @@ jobs:
 
       - name: Create first release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.first-run == true }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: r${{ env.COMMIT_COUNT }}
           name: Cloudstream r${{ env.COMMIT_COUNT }}
@@ -239,7 +239,7 @@ jobs:
 
       - name: Create release
         if: ${{ env.RUN_BUILD == 'true' }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: r${{ env.COMMIT_COUNT }}
           name: Cloudstream r${{ env.COMMIT_COUNT }}
